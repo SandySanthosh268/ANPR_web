@@ -1,0 +1,8 @@
+# Each subproject (backend/, frontend/) has its own .gitignore for
+# language-specific patterns — this covers only what's common across the repo.
+
+.DS_Store
+.vscode/
+.idea/
+*.log
+.env

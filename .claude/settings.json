@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sv http://localhost:8780/api/cameras/cam01)",
+      "Bash(curl -s http://localhost:8780/hls/cam01/index.m3u8)",
+      "Bash(rm -f /tmp/pipeline_m8.pid)",
+      "Bash(pkill -f \"app.main\")",
+      "Bash(npm create *)",
+      "Bash(curl -s http://localhost:8765/hls/cam01/index.m3u8)",
+      "Bash(curl -s http://localhost:5173/src/components/LivePlayer.jsx)",
+      "Bash(ps -o etimes=,pcpu=,stat= -p 12764)",
+      "Bash(top -bn1 -p 12764)",
+      "Bash(curl -s http://localhost:5173/src/pages/CameraView.jsx)"
+    ]
+  }
+}

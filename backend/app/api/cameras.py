@@ -1,0 +1,20 @@
+from fastapi import APIRouter
+
+from app import config
+from app.services import segment_store
+
+router = APIRouter(prefix="/api/cameras", tags=["cameras"])
+
+
+@router.get("/{camera_id}")
+def get_camera(camera_id: str) -> dict:
+    base = f"{config.PUBLIC_HOST}:{config.PUBLIC_PORT}"
+    store = segment_store.get(camera_id)
+    return {
+        "camera_id": camera_id,
+        "hls_url": f"http://{base}/hls/{camera_id}/index.m3u8",
+        "detections_url": f"http://{base}/api/detections/{camera_id}",
+        "total_segments": store.total_segments if store else None,
+        "duration_s": store.duration_s if store else None,
+        "hls_ready": store.hls_ready if store else False,
+    }
