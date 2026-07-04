@@ -6,7 +6,7 @@ from app import config
 from app.camera.frame_source import Frame, FrameSource
 from app.camera.rtsp_reader import RTSPReader
 from app.camera.video_reader import VideoReader
-from app.config import DATABASE_URL, FRAME_QUEUE_MAXSIZE, HLS_SEGMENT_SECONDS
+from app.config import DATABASE_URL, FRAME_QUEUE_MAXSIZE, HLS_SEGMENT_SECONDS, PROCESSING_FPS
 from app.services import segment_store
 from app.services.api_server import ApiServer
 from app.services.frame_queue import FrameQueue
@@ -54,7 +54,9 @@ def _run_one_cycle(source: str, camera_id: str, pipeline: Pipeline) -> None:
     interrupted (RTSPReader reconnects internally, so one "cycle" is the
     whole process lifetime).
     """
-    reader: FrameSource = RTSPReader(source) if _is_rtsp(source) else VideoReader(source)
+    reader: FrameSource = (
+        RTSPReader(source) if _is_rtsp(source) else VideoReader(source, target_fps=PROCESSING_FPS)
+    )
     frame_queue = FrameQueue(maxsize=FRAME_QUEUE_MAXSIZE)
 
     hls_service = HlsService(camera_id=camera_id, source=source)

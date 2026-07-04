@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from app.config import VEHICLE_CLASS_MAP, VEHICLE_CONF_THRESHOLD
+from app.config import VEHICLE_CLASS_MAP, VEHICLE_CONF_THRESHOLD, VEHICLE_DETECTION_IMGSZ
 from app.detection.vehicle_detector import VehicleDetector
 from app.utils.logger import get_logger
 
@@ -34,6 +34,7 @@ class ByteTracker:
             tracker="bytetrack.yaml",
             persist=True,
             verbose=False,
+            imgsz=VEHICLE_DETECTION_IMGSZ,
         )
         tracked: list[TrackedVehicle] = []
         boxes = results[0].boxes

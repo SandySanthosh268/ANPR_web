@@ -38,6 +38,7 @@ class SegmentStore:
                     "plate_bbox": list(r.plate_bbox) if r.plate_bbox else None,
                     "plate": r.plate,
                     "vehicle_confidence": r.vehicle_confidence,
+                    "ocr_confidence": r.ocr_confidence,
                 }
                 for r in results
             ],

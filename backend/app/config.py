@@ -17,6 +17,12 @@ MODELS_DIR = BACKEND_DIR / "models"
 
 VEHICLE_MODEL_PATH = str(MODELS_DIR / "yolov8n.pt")
 VEHICLE_CONF_THRESHOLD = 0.4
+# YOLO resizes to this internally then rescales boxes back to the original
+# frame's coordinates automatically — running at native 1920x1080 every
+# frame is the single biggest CPU cost in the pipeline (cost scales roughly
+# with resolution squared); 640 detects vehicle-scale objects fine at a
+# fraction of the compute.
+VEHICLE_DETECTION_IMGSZ = 640
 # COCO class_id -> vehicle_type. COCO has no auto-rickshaw/van/pickup classes;
 # truck is used as a stopgap for those until a custom-trained model replaces this.
 VEHICLE_CLASS_MAP = {
@@ -26,15 +32,22 @@ VEHICLE_CLASS_MAP = {
     7: "truck",
 }
 
-PLATE_MODEL_PATH = str(MODELS_DIR / "number_plate_yolov8s_v2.pt")
-PLATE_CONF_THRESHOLD = 0.25
+PLATE_MODEL_PATH = str(MODELS_DIR / "best.pt")
+PLATE_CONF_THRESHOLD = 0.20
 
 OCR_LANG = "en"
-OCR_CONF_THRESHOLD = 0.85
+OCR_CONF_THRESHOLD = 0.50
 OCR_MAX_ATTEMPTS_PER_TRACK = 5
 OCR_COOLDOWN_FRAMES = 10
 
 FRAME_QUEUE_MAXSIZE = 5
+
+# Decimate a video file's frame rate down to this before it ever reaches the
+# pipeline — a fixed, uniform stride (unlike the earlier load-adaptive
+# skipping) that cuts CPU workload substantially while keeping consecutive
+# processed frames close enough together for ByteTrack to still follow
+# normal traffic motion. None/0 disables decimation (process every frame).
+PROCESSING_FPS = 10
 
 RTSP_RECONNECT_INITIAL_DELAY = 1.0
 RTSP_RECONNECT_MAX_DELAY = 30.0
