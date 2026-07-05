@@ -7,7 +7,7 @@ from app.camera.frame_source import Frame, FrameSource
 from app.camera.rtsp_reader import RTSPReader
 from app.camera.video_reader import VideoReader
 from app.config import DATABASE_URL, FRAME_QUEUE_MAXSIZE, HLS_SEGMENT_SECONDS, PROCESSING_FPS
-from app.services import segment_store
+from app.services import pipeline_controller, segment_store
 from app.services.api_server import ApiServer
 from app.services.frame_queue import FrameQueue
 from app.services.hls_service import HlsService
@@ -75,21 +75,43 @@ def _run_one_cycle(source: str, camera_id: str, pipeline: Pipeline) -> None:
 
     current_segment_index = -1
     last_video_time = 0.0
+    segment_durations: list[float] = []
+    segment_wall_start = time.monotonic()
 
     try:
         while not stop_event.is_set() or frame_queue.qsize() > 0:
             frame: Frame | None = frame_queue.get(timeout=1.0)
             if frame is None:
                 continue
+
+            t0 = time.monotonic()
             results = pipeline.process(frame)
+            duration = time.monotonic() - t0
 
             if frame.video_time is not None:
                 last_video_time = frame.video_time
-                current_segment_index = int(frame.video_time // HLS_SEGMENT_SECONDS)
+                new_segment_index = int(frame.video_time // HLS_SEGMENT_SECONDS)
+                if new_segment_index != current_segment_index and segment_durations:
+                    wall_elapsed = time.monotonic() - segment_wall_start
+                    logger.info(
+                        "Segment %d done: %d frames | detection time min=%.3fs max=%.3fs avg=%.3fs "
+                        "| wall_elapsed=%.2fs (budget=%.1fs) | queue_depth=%d dropped_total=%d",
+                        current_segment_index,
+                        len(segment_durations),
+                        min(segment_durations),
+                        max(segment_durations),
+                        sum(segment_durations) / len(segment_durations),
+                        wall_elapsed,
+                        HLS_SEGMENT_SECONDS,
+                        frame_queue.qsize(),
+                        frame_queue.dropped_frames,
+                    )
+                    segment_durations = []
+                    segment_wall_start = time.monotonic()
+                current_segment_index = new_segment_index
                 store.add_frame(current_segment_index, frame.video_time, results)
 
-            if frame_queue.dropped_frames:
-                logger.debug("Dropped frames so far: %d", frame_queue.dropped_frames)
+            segment_durations.append(duration)
     finally:
         if current_segment_index >= 0:
             store.mark_source_ended(current_segment_index + 1, last_video_time)
@@ -111,6 +133,17 @@ def run(source: str, camera_id: str, api_host: str, api_port: int) -> None:
 
     api_server = ApiServer(host=api_host, port=api_port)
     api_server.start()
+
+    # Models are already loaded above (the slow part) — but the actual
+    # video-reading/detection loop waits here until something explicitly
+    # asks it to start (e.g. the frontend's Play button hitting
+    # POST /api/cameras/{id}/start), instead of always running the moment
+    # this process launches regardless of whether anyone is watching.
+    controller = pipeline_controller.PipelineController()
+    pipeline_controller.register(camera_id, controller)
+    logger.info("Ready — waiting for start signal for camera %s", camera_id)
+    controller.wait_for_start()
+    logger.info("Start signal received — beginning video processing")
 
     is_rtsp = _is_rtsp(source)
     try:

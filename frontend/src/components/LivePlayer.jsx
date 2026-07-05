@@ -6,7 +6,7 @@ import CanvasOverlay from './CanvasOverlay'
 const RETRY_DELAY_MS = 1200
 const MAX_ATTEMPTS = 3
 
-export default function LivePlayer({ hlsUrl, detectionsUrl, onEnded, onPlateResult }) {
+export default function LivePlayer({ hlsUrl, detectionsUrl, onEnded }) {
   const videoRef = useRef(null)
   const [frames, setFrames] = useState([])
   const [buffering, setBuffering] = useState(true)
@@ -28,15 +28,6 @@ export default function LivePlayer({ hlsUrl, detectionsUrl, onEnded, onPlateResu
         .then((result) => {
           if (latestSegmentRef.current !== segment) return
           setFrames(result.frames)
-          // OCR results ride along in the same per-frame detections used for
-          // the live overlay boxes — surface any with a resolved plate to
-          // the table below the player, rather than opening a separate
-          // channel for something the data already carries.
-          for (const frame of result.frames) {
-            for (const d of frame.detections ?? []) {
-              if (d.plate) onPlateResult?.(d)
-            }
-          }
         })
         .catch(() => {
           if (latestSegmentRef.current !== segment) return

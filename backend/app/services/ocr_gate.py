@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass
 
 import cv2
@@ -39,28 +40,36 @@ class OcrGate:
         self._max_attempts = max_attempts
         self._cooldown_frames = cooldown_frames
         self._state: dict[int, _TrackOcrState] = {}
+        # should_run() runs on the main pipeline thread; record_attempt() runs
+        # on the OcrWorker background thread once a result comes back — both
+        # touch the same per-track state, so this needs a lock.
+        self._lock = threading.Lock()
 
     def should_run(self, track_id: int, frame_id: int, plate_crop: np.ndarray) -> bool:
-        state = self._state.setdefault(track_id, _TrackOcrState())
-
-        if state.attempts == 0:
-            return True
-        if state.best_confidence >= self._conf_threshold:
-            return False
-        if state.attempts >= self._max_attempts:
-            return False
-        if frame_id - state.last_ocr_frame < self._cooldown_frames:
-            return False
-        return _sharpness(plate_crop) > state.best_sharpness
+        with self._lock:
+            state = self._state.setdefault(track_id, _TrackOcrState())
+            if state.attempts == 0:
+                return True
+            if state.best_confidence >= self._conf_threshold:
+                return False
+            if state.attempts >= self._max_attempts:
+                return False
+            if frame_id - state.last_ocr_frame < self._cooldown_frames:
+                return False
+            best_sharpness = state.best_sharpness
+        return _sharpness(plate_crop) > best_sharpness
 
     def record_attempt(
         self, track_id: int, frame_id: int, confidence: float, plate_crop: np.ndarray
     ) -> None:
-        state = self._state.setdefault(track_id, _TrackOcrState())
-        state.attempts += 1
-        state.last_ocr_frame = frame_id
-        state.best_confidence = max(state.best_confidence, confidence)
-        state.best_sharpness = max(state.best_sharpness, _sharpness(plate_crop))
+        sharpness = _sharpness(plate_crop)
+        with self._lock:
+            state = self._state.setdefault(track_id, _TrackOcrState())
+            state.attempts += 1
+            state.last_ocr_frame = frame_id
+            state.best_confidence = max(state.best_confidence, confidence)
+            state.best_sharpness = max(state.best_sharpness, sharpness)
 
     def forget(self, track_id: int) -> None:
-        self._state.pop(track_id, None)
+        with self._lock:
+            self._state.pop(track_id, None)

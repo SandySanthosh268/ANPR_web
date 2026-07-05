@@ -25,6 +25,12 @@ class SegmentStore:
         self.total_segments: int | None = None
         self.duration_s: float | None = None
         self.hls_ready = False
+        # Best OCR reading per track_id so far — populated asynchronously by
+        # OcrWorker, independent of which segment/frame triggered it. Polled
+        # by the frontend's Detection Table, decoupled from segment fetches
+        # (an OCR result can resolve well after its triggering segment was
+        # already served to the player).
+        self._plate_results: dict[int, dict] = {}
 
     def add_frame(self, segment_index: int, video_time: float, results: list[DetectionResult]) -> None:
         frame_entry = {
@@ -62,6 +68,24 @@ class SegmentStore:
             self.total_segments = total_segments
             self.duration_s = duration_s
             self.hls_ready = True
+
+    def record_plate_result(
+        self, track_id: int, vehicle_type: str, plate: str, ocr_confidence: float
+    ) -> None:
+        with self._lock:
+            existing = self._plate_results.get(track_id)
+            if existing is not None and existing["ocr_confidence"] >= ocr_confidence:
+                return
+            self._plate_results[track_id] = {
+                "track_id": track_id,
+                "vehicle_type": vehicle_type,
+                "plate": plate,
+                "ocr_confidence": ocr_confidence,
+            }
+
+    def get_plate_results(self) -> list[dict]:
+        with self._lock:
+            return list(self._plate_results.values())
 
 
 _registry: dict[str, SegmentStore] = {}

@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 
 from app.config import FFMPEG_BINARY, HLS_OUTPUT_DIR, HLS_SEGMENT_SECONDS
@@ -20,6 +21,12 @@ class HlsService:
 
     def start(self) -> None:
         out_dir = HLS_OUTPUT_DIR / self._camera_id
+        # ffmpeg only overwrites segment filenames the new encode reuses —
+        # leftover segments from a longer previous cycle (e.g. seg_00020.ts
+        # when this cycle only produces 10) would otherwise sit on disk
+        # forever, unreferenced by the fresh manifest but never cleaned up.
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
             FFMPEG_BINARY,

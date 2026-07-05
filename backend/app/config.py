@@ -8,6 +8,10 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Avoid oversubscribing the host: on CPU, torch defaults to using every core,
 # which fights the concurrently-running ffmpeg HLS transcode (and anything
 # else on the machine) for CPU time instead of leaving it any headroom.
+# Tested relaxing this to (cores - 2): measured dropped-frames-per-cycle was
+# the same or slightly worse (594-595 vs baseline 545-559), so reverted —
+# on this specific machine (already under heavy external load), more torch
+# threads just means more contention, not more real throughput.
 if DEVICE == "cpu":
     torch.set_num_threads(max(1, (os.cpu_count() or 4) // 2))
 
@@ -47,7 +51,7 @@ FRAME_QUEUE_MAXSIZE = 5
 # skipping) that cuts CPU workload substantially while keeping consecutive
 # processed frames close enough together for ByteTrack to still follow
 # normal traffic motion. None/0 disables decimation (process every frame).
-PROCESSING_FPS = 10
+PROCESSING_FPS = 5
 
 RTSP_RECONNECT_INITIAL_DELAY = 1.0
 RTSP_RECONNECT_MAX_DELAY = 30.0

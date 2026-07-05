@@ -6,7 +6,9 @@ from app.camera.frame_source import Frame
 from app.detection.plate_detector import PlateDetector
 from app.detection.vehicle_detector import VehicleDetector
 from app.ocr.plate_reader import PlateReader
+from app.services import segment_store
 from app.services.ocr_gate import OcrGate
+from app.services.ocr_worker import OcrJob, OcrWorker
 from app.services.result_sink import DetectionResult, ResultSink
 from app.tracking.bytetrack import ByteTracker, TrackedVehicle
 from app.utils.logger import get_logger
@@ -48,6 +50,10 @@ class Pipeline:
         self.plate_detector = PlateDetector()
         self.ocr_reader = PlateReader()
         self.ocr_gate = OcrGate()
+        # OCR runs on its own thread — it's ~1-2s per call on CPU, and running
+        # it inline on the main loop stalled frame consumption long enough to
+        # overflow the frame queue and drop everything that arrived meanwhile.
+        self.ocr_worker = OcrWorker(self.ocr_reader, self.ocr_gate, self._on_ocr_result)
 
         self._recent_durations: list[float] = []
         self._frames_since_plate_attempt = 0
@@ -100,14 +106,22 @@ class Pipeline:
         self._record_duration(time.monotonic() - start)
         return results
 
+    def _on_ocr_result(self, track_id: int, vehicle_type: str, plate_text: str, confidence: float) -> None:
+        # Runs on the OcrWorker thread, once a result comes back — arrives
+        # asynchronously relative to whichever frame triggered it, so it's
+        # surfaced through a separate per-track store (polled by the
+        # frontend's Detection Table) rather than retrofitted into a
+        # frame-by-frame detections list that may already be served.
+        store = segment_store.get(self.camera_id)
+        if store is not None:
+            store.record_plate_result(track_id, vehicle_type, plate_text, confidence)
+
     def _process_vehicle(
         self, frame: Frame, vehicle: TrackedVehicle, skip_plate: bool
     ) -> DetectionResult:
         vehicle_crop = _crop(frame.image, vehicle.bbox)
         plate_bbox: tuple[int, int, int, int] | None = None
-        plate_text: str | None = None
         plate_detection_confidence: float | None = None
-        ocr_confidence: float | None = None
 
         plate = None if skip_plate else self.plate_detector.detect(vehicle_crop)
         if plate is not None:
@@ -117,14 +131,17 @@ class Pipeline:
             plate_detection_confidence = plate.confidence
             plate_crop = _crop(vehicle_crop, plate.bbox)
 
-            if self.ocr_gate.should_run(vehicle.track_id, frame.frame_id, plate_crop):
-                ocr_result = self.ocr_reader.read(plate_crop)
-                if ocr_result is not None:
-                    self.ocr_gate.record_attempt(
-                        vehicle.track_id, frame.frame_id, ocr_result.confidence, plate_crop
+            if self.ocr_gate.should_run(
+                vehicle.track_id, frame.frame_id, plate_crop
+            ) and not self.ocr_worker.is_pending(vehicle.track_id):
+                self.ocr_worker.submit(
+                    OcrJob(
+                        track_id=vehicle.track_id,
+                        frame_id=frame.frame_id,
+                        vehicle_type=vehicle.vehicle_type,
+                        plate_crop=plate_crop,
                     )
-                    plate_text = ocr_result.text
-                    ocr_confidence = ocr_result.confidence
+                )
 
         result = DetectionResult(
             camera_id=self.camera_id,
@@ -134,10 +151,10 @@ class Pipeline:
             vehicle_type=vehicle.vehicle_type,
             vehicle_bbox=vehicle.bbox,
             plate_bbox=plate_bbox,
-            plate=plate_text,
+            plate=None,
             vehicle_confidence=vehicle.confidence,
             plate_confidence=plate_detection_confidence,
-            ocr_confidence=ocr_confidence,
+            ocr_confidence=None,
         )
         self.sink.emit(result)
         return result

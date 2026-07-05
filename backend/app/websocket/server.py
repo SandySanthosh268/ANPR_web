@@ -21,11 +21,18 @@ async def no_cache_manifest(request: Request, call_next):
     # The .m3u8 manifest's content changes across each source-loop cycle at
     # the *same* URL (fresh segments, or none yet) — without this, the
     # browser can cache an early/empty snapshot indefinitely and never
-    # re-fetch, leaving hls.js permanently stuck. Segment .ts files are safe
-    # to cache (immutable once written) and are unaffected by this.
+    # re-fetch, leaving hls.js permanently stuck.
     response = await call_next(request)
     if request.url.path.endswith(".m3u8"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    elif response.status_code == 404:
+        # A segment .ts file is safe to cache once it exists (immutable
+        # after ffmpeg finishes writing it) — but hls.js can request it
+        # fractions of a second *before* ffmpeg has finished, getting a
+        # genuine 404. Without this, the browser's default heuristic caching
+        # can cache that 404 and keep serving it even after the real file
+        # exists, permanently "losing" that segment and stalling playback.
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
