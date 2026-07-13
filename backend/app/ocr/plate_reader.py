@@ -64,12 +64,26 @@ class PlateReader:
         if not result or not result[0]:
             return None
 
-        best_text, best_conf = "", 0.0
-        for _, (text, conf) in result[0]:
-            if conf > best_conf:
-                best_text, best_conf = text, conf
+        # A double-line plate (state+RTO code on one line, series+number on
+        # the next — common on two-wheelers) is detected by PaddleOCR as
+        # *separate* text boxes, one per line. Keeping only the single
+        # highest-confidence box (the old behavior) silently discarded
+        # whichever line lost that comparison, so a double-line plate could
+        # never produce its full number — only ever half of it. Sorting by
+        # each box's top y-coordinate and concatenating reconstructs the
+        # correct top-to-bottom reading order instead.
+        lines = sorted(result[0], key=lambda entry: min(point[1] for point in entry[0]))
 
-        normalized = _normalize_text(best_text)
-        if not normalized:
+        texts: list[str] = []
+        confidences: list[float] = []
+        for _, (text, conf) in lines:
+            normalized = _normalize_text(text)
+            if normalized:
+                texts.append(normalized)
+                confidences.append(conf)
+
+        if not texts:
             return None
-        return OcrResult(text=normalized, confidence=float(best_conf))
+        combined_text = "".join(texts)
+        combined_confidence = sum(confidences) / len(confidences)
+        return OcrResult(text=combined_text, confidence=float(combined_confidence))

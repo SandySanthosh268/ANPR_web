@@ -15,10 +15,12 @@ class DetectionResult:
     timestamp: float
     track_id: int
     vehicle_type: str
-    vehicle_bbox: tuple[int, int, int, int]
+    # No vehicle-detection stage — plates are tracked directly on the full
+    # frame, so there's no vehicle box/confidence to report.
+    vehicle_bbox: tuple[int, int, int, int] | None
     plate_bbox: tuple[int, int, int, int] | None
     plate: str | None
-    vehicle_confidence: float
+    vehicle_confidence: float | None
     plate_confidence: float | None
     ocr_confidence: float | None
 

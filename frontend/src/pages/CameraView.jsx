@@ -9,15 +9,36 @@ export default function CameraView({ cameraId }) {
   const [camera, setCamera] = useState(null)
   const [error, setError] = useState(null)
   const [started, setStarted] = useState(false)
-  // Keyed by track_id so a track's row updates in place as OCR retries
-  // produce a better reading, instead of accumulating duplicate rows.
-  const [plateResults, setPlateResults] = useState({})
+  // Every OCR attempt (accepted, rejected, or no readable text) — the
+  // backend already returns the full bounded, most-recent-first list, so
+  // this is just replaced wholesale on each poll rather than merged.
+  const [plateResults, setPlateResults] = useState([])
 
   useEffect(() => {
     getCamera(cameraId)
       .then(setCamera)
       .catch((err) => setError(err.message))
   }, [cameraId])
+
+  // frame_width/frame_height (the source resolution detection bboxes are in)
+  // are only known once the backend's pipeline has processed its first frame
+  // — null at the moment Play is clicked. Poll briefly until populated so
+  // CanvasOverlay can scale boxes correctly instead of assuming they're in
+  // the HLS preview stream's (possibly downscaled) decoded resolution.
+  useEffect(() => {
+    if (!started || !camera || camera.frame_width) return
+    const interval = setInterval(() => {
+      getCamera(cameraId)
+        .then((data) => {
+          if (data.frame_width) {
+            setCamera(data)
+            clearInterval(interval)
+          }
+        })
+        .catch(() => {})
+    }, 500)
+    return () => clearInterval(interval)
+  }, [started, camera, cameraId])
 
   // OCR runs asynchronously on the backend and can resolve well after its
   // triggering segment was already fetched for the live overlay, so results
@@ -27,19 +48,28 @@ export default function CameraView({ cameraId }) {
     if (!started || !camera) return
     const poll = () => {
       getPlateResults(camera.detections_url)
-        .then(({ results }) => {
-          setPlateResults((prev) => {
-            const next = { ...prev }
-            for (const r of results) next[r.track_id] = r
-            return next
-          })
-        })
+        .then(({ results }) => setPlateResults(results))
         .catch(() => {})
     }
     poll()
     const interval = setInterval(poll, PLATE_POLL_MS)
     return () => clearInterval(interval)
   }, [started, camera])
+
+  // vehicle_count climbs as PlateTracker mints new track ids — same poll
+  // cadence as plate results, just re-fetching the camera endpoint since
+  // that's where the backend surfaces it (no dedicated count endpoint).
+  useEffect(() => {
+    if (!started) return
+    const poll = () => {
+      getCamera(cameraId)
+        .then((data) => setCamera((prev) => (prev ? { ...prev, vehicle_count: data.vehicle_count } : prev)))
+        .catch(() => {})
+    }
+    poll()
+    const interval = setInterval(poll, PLATE_POLL_MS)
+    return () => clearInterval(interval)
+  }, [started, cameraId])
 
   if (error) return <p className="text-red-400">Failed to load camera: {error}</p>
   if (!camera) return <p className="text-gray-400">Loading camera {cameraId}...</p>
@@ -49,12 +79,17 @@ export default function CameraView({ cameraId }) {
       <h1 className="text-xl font-semibold mb-3">Camera: {camera.camera_id}</h1>
       {started ? (
         <>
+          <p className="mb-2 text-gray-300">
+            Vehicles crossed: <span className="font-semibold text-white">{camera.vehicle_count ?? 0}</span>
+          </p>
           <LivePlayer
             hlsUrl={camera.hls_url}
             detectionsUrl={camera.detections_url}
+            frameWidth={camera.frame_width}
+            frameHeight={camera.frame_height}
             onEnded={() => {
               setStarted(false)
-              setPlateResults({})
+              setPlateResults([])
             }}
           />
           <DetectionTable results={plateResults} />

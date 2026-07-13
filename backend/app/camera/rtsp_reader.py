@@ -1,3 +1,4 @@
+import re
 import threading
 import time
 
@@ -8,6 +9,15 @@ from app.config import RTSP_RECONNECT_INITIAL_DELAY, RTSP_RECONNECT_MAX_DELAY
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# RTSP URLs commonly embed the camera's login credentials
+# (rtsp://user:password@host/...) — logged messages must not leak that
+# password in plaintext into run.log.
+_CREDENTIALS_PATTERN = re.compile(r"//[^:@/]+:[^@/]+@")
+
+
+def _redact_url(url: str) -> str:
+    return _CREDENTIALS_PATTERN.sub("//<redacted>@", url)
 
 
 class RTSPReader(FrameSource):
@@ -20,6 +30,7 @@ class RTSPReader(FrameSource):
 
     def __init__(self, url: str):
         self._url = url
+        self._safe_url = _redact_url(url)  # for logging only — never the real credentials
         self._frame_id = 0
         self._lock = threading.Lock()
         self._latest: Frame | None = None
@@ -39,19 +50,19 @@ class RTSPReader(FrameSource):
             if self._cap is None or not self._cap.isOpened():
                 if not self._connect():
                     logger.warning(
-                        "Failed to connect to RTSP %s, retrying in %.1fs", self._url, delay
+                        "Failed to connect to RTSP %s, retrying in %.1fs", self._safe_url, delay
                     )
                     self._healthy = False
                     time.sleep(delay)
                     delay = min(delay * 2, RTSP_RECONNECT_MAX_DELAY)
                     continue
-                logger.info("Connected to RTSP %s", self._url)
+                logger.info("Connected to RTSP %s", self._safe_url)
                 delay = RTSP_RECONNECT_INITIAL_DELAY
                 self._healthy = True
 
             ok, image = self._cap.read()
             if not ok:
-                logger.warning("Lost RTSP stream %s, reconnecting", self._url)
+                logger.warning("Lost RTSP stream %s, reconnecting", self._safe_url)
                 self._healthy = False
                 self._cap.release()
                 self._cap = None

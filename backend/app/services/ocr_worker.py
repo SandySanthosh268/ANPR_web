@@ -6,7 +6,7 @@ from typing import Callable
 import numpy as np
 
 from app.ocr.plate_reader import PlateReader
-from app.ocr.plate_validator import is_valid_plate
+from app.ocr.plate_validator import normalize_plate
 from app.services.ocr_gate import OcrGate
 from app.utils.logger import get_logger
 
@@ -17,19 +17,23 @@ logger = get_logger(__name__)
 class OcrJob:
     track_id: int
     frame_id: int
+    timestamp: float
     vehicle_type: str
     plate_crop: np.ndarray
 
 
 class OcrWorker:
-    """Runs OCR — the pipeline's single most expensive stage, ~1-2s per call
-    on CPU with PaddleOCR — on a dedicated background thread.
+    """Runs OCR on a dedicated background thread instead of inline on the
+    main per-frame loop.
 
-    Without this, one OCR call blocks the main per-frame loop for its full
-    duration; during those ~2s the incoming (already-decimated) frame queue
-    fills up and starts dropping frames, since nothing is draining it. Moving
-    OCR off that thread lets tracking + plate detection keep consuming frames
-    at their own (much faster) pace while OCR catches up whenever it can.
+    Measured directly on real plate crops on this CPU: PaddleOCR's `.read()`
+    call costs ~0.07-0.4s (avg ~0.12s) — cheaper than once assumed here, but
+    still enough that running it inline stalls frame consumption on every
+    OCR-eligible sighting, and multiple plates in one frame compound that.
+    Moving it off the main thread lets tracking + plate detection keep
+    consuming frames at their own pace while OCR catches up whenever it can,
+    instead of the incoming (already-decimated) frame queue filling up and
+    dropping frames during every OCR call.
 
     A track can have at most one outstanding OCR job at a time (`_pending`),
     matching what OcrGate already assumed when OCR was synchronous.
@@ -39,8 +43,8 @@ class OcrWorker:
         self,
         ocr_reader: PlateReader,
         ocr_gate: OcrGate,
-        on_result: Callable[[int, str, str, float], None],
-        maxsize: int = 4,
+        on_result: Callable[[int, int, float, str, str | None, float | None, np.ndarray, str], None],
+        maxsize: int = 12,
     ):
         self._ocr_reader = ocr_reader
         self._ocr_gate = ocr_gate
@@ -69,6 +73,12 @@ class OcrWorker:
                 dropped = self._queue.get_nowait()
                 with self._lock:
                     self._pending.discard(dropped.track_id)
+                logger.info(
+                    "OCR queue full (%d) — dropped track %d's queued job to make room for track %d",
+                    self._queue.maxsize,
+                    dropped.track_id,
+                    job.track_id,
+                )
             except queue.Empty:
                 pass
         self._queue.put_nowait(job)
@@ -78,7 +88,13 @@ class OcrWorker:
             job = self._queue.get()
             try:
                 result = self._ocr_reader.read(job.plate_crop)
-                if result is not None:
+                if result is None:
+                    logger.info("OCR found no readable text for track %d", job.track_id)
+                    self._on_result(
+                        job.track_id, job.frame_id, job.timestamp, job.vehicle_type,
+                        None, None, job.plate_crop, "no_text",
+                    )
+                else:
                     # Still counts as an attempt even if the text fails
                     # validation below — that's what throttles retries via
                     # OcrGate's cooldown/max-attempts, regardless of whether
@@ -86,13 +102,22 @@ class OcrWorker:
                     self._ocr_gate.record_attempt(
                         job.track_id, job.frame_id, result.confidence, job.plate_crop
                     )
-                    if is_valid_plate(result.text):
-                        self._on_result(job.track_id, job.vehicle_type, result.text, result.confidence)
+                    normalized = normalize_plate(result.text)
+                    if normalized is not None:
+                        self._on_result(
+                            job.track_id, job.frame_id, job.timestamp, job.vehicle_type,
+                            normalized, result.confidence, job.plate_crop, "accepted",
+                        )
                     else:
-                        logger.debug(
-                            "Rejected OCR read %r for track %d (fails plate format check)",
+                        logger.info(
+                            "Rejected OCR read %r (conf=%.2f) for track %d (fails plate format check)",
                             result.text,
+                            result.confidence,
                             job.track_id,
+                        )
+                        self._on_result(
+                            job.track_id, job.frame_id, job.timestamp, job.vehicle_type,
+                            result.text, result.confidence, job.plate_crop, "rejected",
                         )
             except Exception:
                 logger.exception("OCR worker failed on track %d", job.track_id)

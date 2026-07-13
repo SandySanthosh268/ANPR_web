@@ -18,6 +18,9 @@ def get_camera(camera_id: str) -> dict:
         "total_segments": store.total_segments if store else None,
         "duration_s": store.duration_s if store else None,
         "hls_ready": store.hls_ready if store else False,
+        "frame_width": store.frame_width if store else None,
+        "frame_height": store.frame_height if store else None,
+        "vehicle_count": store.vehicle_count if store else 0,
         "started": controller.is_started() if controller else False,
     }
 

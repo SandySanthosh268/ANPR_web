@@ -84,6 +84,10 @@ def _run_one_cycle(source: str, camera_id: str, pipeline: Pipeline) -> None:
             if frame is None:
                 continue
 
+            if store.frame_width is None:
+                height, width = frame.image.shape[:2]
+                store.set_source_resolution(width, height)
+
             t0 = time.monotonic()
             results = pipeline.process(frame)
             duration = time.monotonic() - t0
@@ -141,17 +145,28 @@ def run(source: str, camera_id: str, api_host: str, api_port: int) -> None:
     # this process launches regardless of whether anyone is watching.
     controller = pipeline_controller.PipelineController()
     pipeline_controller.register(camera_id, controller)
-    logger.info("Ready — waiting for start signal for camera %s", camera_id)
-    controller.wait_for_start()
-    logger.info("Start signal received — beginning video processing")
-
     is_rtsp = _is_rtsp(source)
+
+    # Video files run exactly one cycle per Play click, not an
+    # auto-restarting loop. Looping silently reset the HLS output/
+    # segment_store to a fresh cycle while the browser's single hls.js
+    # instance was still playing through the *previous* cycle's manifest —
+    # segment numbers and detection data went out of sync mid-playback
+    # (404s, missing boxes) once the backend had already moved on to a
+    # later cycle than what the client was still watching. Resetting the
+    # controller after each cycle lets a later Play click (POST /start)
+    # trigger a fresh, clean cycle instead of looping unattended. RTSP
+    # already behaves as one indefinite "cycle" (RTSPReader reconnects
+    # internally), so it only ever runs through this once.
     try:
         while True:
+            logger.info("Ready — waiting for start signal for camera %s", camera_id)
+            controller.wait_for_start()
+            logger.info("Start signal received — beginning video processing")
             _run_one_cycle(source, camera_id, pipeline)
             if is_rtsp:
                 break
-            logger.info("Video source ended — restarting for continuous playback")
+            controller.reset()
     except KeyboardInterrupt:
         logger.info("Interrupted, shutting down")
 

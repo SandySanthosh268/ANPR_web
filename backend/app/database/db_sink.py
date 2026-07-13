@@ -64,7 +64,7 @@ class DbSink(ResultSink):
             "vehicle_confidence": result.vehicle_confidence,
             "plate_confidence": result.plate_confidence,
             "ocr_confidence": result.ocr_confidence,
-            "vehicle_bbox": list(result.vehicle_bbox),
+            "vehicle_bbox": list(result.vehicle_bbox) if result.vehicle_bbox else None,
             "plate_bbox": list(result.plate_bbox) if result.plate_bbox else None,
             "frame_id": result.frame_id,
             "timestamp": result.timestamp,

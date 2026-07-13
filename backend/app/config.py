@@ -2,6 +2,10 @@ import os
 from pathlib import Path
 
 import torch
+from dotenv import load_dotenv
+
+# backend/app/config.py -> backend/.env
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -19,28 +23,25 @@ if DEVICE == "cpu":
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 MODELS_DIR = BACKEND_DIR / "models"
 
-VEHICLE_MODEL_PATH = str(MODELS_DIR / "yolov8n.pt")
-VEHICLE_CONF_THRESHOLD = 0.4
-# YOLO resizes to this internally then rescales boxes back to the original
-# frame's coordinates automatically — running at native 1920x1080 every
-# frame is the single biggest CPU cost in the pipeline (cost scales roughly
-# with resolution squared); 640 detects vehicle-scale objects fine at a
-# fraction of the compute.
-VEHICLE_DETECTION_IMGSZ = 640
-# COCO class_id -> vehicle_type. COCO has no auto-rickshaw/van/pickup classes;
-# truck is used as a stopgap for those until a custom-trained model replaces this.
-VEHICLE_CLASS_MAP = {
-    2: "car",
-    3: "motorcycle",
-    5: "bus",
-    7: "truck",
-}
-
-PLATE_MODEL_PATH = str(MODELS_DIR / "best.pt")
-PLATE_CONF_THRESHOLD = 0.20
+PLATE_MODEL_PATH = str(MODELS_DIR / "vechile_plate_yolov8s.pt")
+PLATE_CONF_THRESHOLD = 0.25
+# The yolov8s plate weight is ~4x larger than the nano weight and runs on the
+# full frame (no vehicle-crop stage first) — at imgsz=960 that was 1-2.4s per
+# frame on this CPU (vs. 0.2-0.6s for the nano weight), dropping most of the
+# already-decimated frames before they could even be processed. Trading
+# lower imgsz for speed here (960 -> 640, same as the old vehicle stage
+# used) costs some small/distant-plate recall but keeps frame throughput
+# high enough that boxes actually show up regularly instead of once every
+# few seconds.
+PLATE_DETECTION_IMGSZ = 640
+# This weight is a combined vehicle+plate model (12 classes: car, truck,
+# bus, motorcycle, bicycle, auto, van, emergency_vehicle, tractor, hcm_eme,
+# cart, number_plate) — the pipeline still only wants plates, so detection
+# is filtered to this one class name (see plate_tracker.py).
+PLATE_CLASS_NAME = "number_plate"
 
 OCR_LANG = "en"
-OCR_CONF_THRESHOLD = 0.50
+OCR_CONF_THRESHOLD = 0.4
 OCR_MAX_ATTEMPTS_PER_TRACK = 5
 OCR_COOLDOWN_FRAMES = 10
 

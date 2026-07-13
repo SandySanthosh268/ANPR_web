@@ -5,18 +5,9 @@ from ultralytics import YOLO
 # -----------------------------
 # Configuration
 # -----------------------------
-MODEL_PATH = "backend/models/yolov8n.pt"
+MODEL_PATH = "/home/ubuntu/Documents/sandy_files/ANPR_web3/backend/backend/models/best.pt"
 VIDEO_PATH = "/home/ubuntu/Videos/anpr_videos/vid1.mp4"
-
-# Vehicle class names in your model
-# Change according to your training classes
-# COCO class indices (as used by stock yolov8n.pt)
-CLASS_NAMES = {
-    2: "car",
-    3: "motorcycle",
-    5: "bus",
-    7: "truck"
-}
+CONF_THRESHOLD = 0.20
 
 # -----------------------------
 # Load Model
@@ -34,8 +25,8 @@ if not cap.isOpened():
 
 prev_time = time.time()
 
-cv2.namedWindow("Vehicle Detection", cv2.WINDOW_NORMAL)
-cv2.resizeWindow("Vehicle Detection", 960, 540)
+cv2.namedWindow("Plate Detection", cv2.WINDOW_NORMAL)
+cv2.resizeWindow("Plate Detection", 960, 540)
 
 while True:
 
@@ -51,13 +42,13 @@ while True:
 
     results = model(
         frame,
-        conf=0.30,
+        conf=CONF_THRESHOLD,
         verbose=False
     )
 
     inference_time = (time.perf_counter() - start) * 1000  # milliseconds
 
-    vehicle_count = 0
+    plate_count = 0
 
     # -----------------------------
     # Draw detections
@@ -68,23 +59,19 @@ while True:
 
         for box in boxes:
 
-            cls = int(box.cls[0])
             conf = float(box.conf[0])
 
-            if cls not in CLASS_NAMES:
-                continue
-
-            vehicle_count += 1
+            plate_count += 1
 
             x1, y1, x2, y2 = map(int, box.xyxy[0])
 
-            label = f"{CLASS_NAMES[cls]} {conf:.2f}"
+            label = f"plate {conf:.2f}"
 
             cv2.rectangle(
                 frame,
                 (x1, y1),
                 (x2, y2),
-                (0, 255, 0),
+                (0, 255, 255),
                 2
             )
 
@@ -94,7 +81,7 @@ while True:
                 (x1, y1 - 8),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
-                (0, 255, 0),
+                (0, 255, 255),
                 2
             )
 
@@ -130,15 +117,15 @@ while True:
 
     cv2.putText(
         frame,
-        f"Vehicles : {vehicle_count}",
+        f"Plates : {plate_count}",
         (20, 105),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.8,
-        (0, 255, 0),
+        (0, 255, 255),
         2
     )
 
-    cv2.imshow("Vehicle Detection", frame)
+    cv2.imshow("Plate Detection", frame)
 
     key = cv2.waitKey(1)
 

@@ -17,22 +17,21 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def no_cache_manifest(request: Request, call_next):
-    # The .m3u8 manifest's content changes across each source-loop cycle at
-    # the *same* URL (fresh segments, or none yet) — without this, the
-    # browser can cache an early/empty snapshot indefinitely and never
-    # re-fetch, leaving hls.js permanently stuck.
+async def no_cache_hls(request: Request, call_next):
+    # Every cycle (new source file, or the same camera restarted with a
+    # different --source) reuses the exact same URLs — /hls/{camera_id}/
+    # index.m3u8, seg_00000.ts, seg_00001.ts, ... — since the output
+    # directory is per-camera, not per-cycle. Without this, the browser's
+    # default heuristic caching can serve a *previous* cycle's (or even a
+    # previous video file's) cached segment content for the same URL,
+    # instead of the new file the server just wrote — seen as stale
+    # video/duration after swapping --source and restarting. This also
+    # covers the earlier fix for a segment .ts 404 getting cached (hls.js
+    # can request one a fraction of a second before ffmpeg finishes writing
+    # it) — no-store means that retry always hits the network for real.
     response = await call_next(request)
-    if request.url.path.endswith(".m3u8"):
+    if request.url.path.startswith("/hls/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-    elif response.status_code == 404:
-        # A segment .ts file is safe to cache once it exists (immutable
-        # after ffmpeg finishes writing it) — but hls.js can request it
-        # fractions of a second *before* ffmpeg has finished, getting a
-        # genuine 404. Without this, the browser's default heuristic caching
-        # can cache that 404 and keep serving it even after the real file
-        # exists, permanently "losing" that segment and stalling playback.
-        response.headers["Cache-Control"] = "no-store"
     return response
 
 

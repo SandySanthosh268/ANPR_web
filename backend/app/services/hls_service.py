@@ -33,6 +33,16 @@ class HlsService:
             "-y",
             "-i",
             self._source,
+            # Encoding cost scales with pixel count — downscaling to 960px
+            # wide (~1/4 the pixels of a 1080p source) cuts x264 encode time
+            # roughly 4x, which matters a lot when ffmpeg is competing with
+            # the detection pipeline's YOLO/OCR inference for the same CPU.
+            # This is only the browser preview stream; detection reads the
+            # full-resolution source separately (see VideoReader), so this
+            # doesn't affect detection accuracy. -2 keeps height even (a
+            # libx264 requirement) while preserving aspect ratio.
+            "-vf",
+            "scale=960:-2",
             "-c:v",
             "libx264",
             "-preset",

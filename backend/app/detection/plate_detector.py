@@ -1,36 +1,34 @@
 import os
-from dataclasses import dataclass
 
-import numpy as np
 from ultralytics import YOLO
 
-from app.config import DEVICE, PLATE_CONF_THRESHOLD, PLATE_MODEL_PATH
+from app.config import DEVICE, PLATE_MODEL_PATH
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-@dataclass
-class PlateDetection:
-    bbox: tuple[int, int, int, int]  # coordinates relative to the vehicle crop
-    confidence: float
-
-
 class PlateDetector:
-    """Detects a license plate within a cropped vehicle image.
+    """Loads the license-plate YOLO weight for direct full-frame detection.
 
     COCO pretrained YOLO has no license-plate class, so this expects a
-    separately pretrained plate-detection YOLO weight (single class: 'plate').
-    Point PLATE_MODEL_PATH at one of the small open license-plate YOLO models
-    (e.g. from Roboflow Universe / Ultralytics HF hub) until a custom-trained
-    model is available. Loading is lazy so a missing weight file doesn't break
-    pipeline startup for vehicle-only testing.
+    separately trained weight with a plate class (see PLATE_CLASS_NAME in
+    app/config.py — the current weight is a combined vehicle+plate model,
+    filtered down to just its plate class by PlateTracker). The underlying
+    `model` is used directly by tracking.plate_tracker.PlateTracker rather
+    than through a predict-on-a-crop method — plates are detected and
+    tracked straight on the full frame, with no separate vehicle-detection
+    stage first.
     """
 
     def __init__(self, model_path: str = PLATE_MODEL_PATH, device: str = DEVICE):
         self._model_path = model_path
         self._device = device
         self._model: YOLO | None = None
+
+    @property
+    def model(self) -> YOLO:
+        return self._ensure_loaded()
 
     def _ensure_loaded(self) -> YOLO:
         if self._model is None:
@@ -45,18 +43,3 @@ class PlateDetector:
             self._model.to(self._device)
             logger.info("Loaded plate detector %s on %s", self._model_path, self._device)
         return self._model
-
-    def detect(self, vehicle_crop: np.ndarray) -> PlateDetection | None:
-        if vehicle_crop.size == 0:
-            return None
-        model = self._ensure_loaded()
-        results = model.predict(vehicle_crop, conf=PLATE_CONF_THRESHOLD, verbose=False)
-        boxes = results[0].boxes
-        if boxes is None or len(boxes) == 0:
-            return None
-        best = max(boxes, key=lambda b: float(b.conf.item()))
-        x1, y1, x2, y2 = best.xyxy[0].tolist()
-        return PlateDetection(
-            bbox=(int(x1), int(y1), int(x2), int(y2)),
-            confidence=float(best.conf.item()),
-        )

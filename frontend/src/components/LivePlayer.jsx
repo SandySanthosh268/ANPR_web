@@ -4,12 +4,13 @@ import { getDetections } from '../services/api'
 import CanvasOverlay from './CanvasOverlay'
 
 const RETRY_DELAY_MS = 1200
-const MAX_ATTEMPTS = 3
+const MAX_ATTEMPTS = 5
 
-export default function LivePlayer({ hlsUrl, detectionsUrl, onEnded }) {
+export default function LivePlayer({ hlsUrl, detectionsUrl, frameWidth, frameHeight, onEnded }) {
   const videoRef = useRef(null)
   const [frames, setFrames] = useState([])
   const [buffering, setBuffering] = useState(true)
+  const [currentSegment, setCurrentSegment] = useState(null)
   // Tracks the most recently requested segment so a slow retry for an old
   // segment can't clobber a newer one's already-applied result.
   const latestSegmentRef = useRef(-1)
@@ -49,6 +50,7 @@ export default function LivePlayer({ hlsUrl, detectionsUrl, onEnded }) {
       // protocol needed, unlike the previous WebSocket + video_time approach.
       hls.on(Hls.Events.FRAG_CHANGED, (_event, data) => {
         latestSegmentRef.current = data.frag.sn
+        setCurrentSegment(data.frag.sn)
         fetchWithRetry(data.frag.sn)
       })
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -67,6 +69,7 @@ export default function LivePlayer({ hlsUrl, detectionsUrl, onEnded }) {
 
     const stopAll = () => {
       video.pause()
+      setCurrentSegment(null)
       onEnded?.()
     }
     video.addEventListener('ended', stopAll)
@@ -81,7 +84,17 @@ export default function LivePlayer({ hlsUrl, detectionsUrl, onEnded }) {
   return (
     <div className="relative inline-block max-w-full">
       <video ref={videoRef} controls muted className="max-w-full" />
-      <CanvasOverlay frames={frames} videoRef={videoRef} />
+      <CanvasOverlay
+        frames={frames}
+        videoRef={videoRef}
+        frameWidth={frameWidth}
+        frameHeight={frameHeight}
+      />
+      {currentSegment !== null && (
+        <div className="absolute left-2 top-2 rounded bg-black/60 px-2 py-1 text-xs text-white">
+          Segment #{currentSegment}
+        </div>
+      )}
       {buffering && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/80 text-lg text-white">
           Buffering video and detection data...
