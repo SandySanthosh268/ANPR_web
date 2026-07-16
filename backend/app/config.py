@@ -24,7 +24,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 MODELS_DIR = BACKEND_DIR / "models"
 
 PLATE_MODEL_PATH = str(MODELS_DIR / "vechile_plate_yolov8s.pt")
-PLATE_CONF_THRESHOLD = 0.25
+PLATE_CONF_THRESHOLD = 0.20
 # The yolov8s plate weight is ~4x larger than the nano weight and runs on the
 # full frame (no vehicle-crop stage first) — at imgsz=960 that was 1-2.4s per
 # frame on this CPU (vs. 0.2-0.6s for the nano weight), dropping most of the
@@ -41,17 +41,14 @@ PLATE_DETECTION_IMGSZ = 640
 PLATE_CLASS_NAME = "number_plate"
 
 OCR_LANG = "en"
-OCR_CONF_THRESHOLD = 0.4
-OCR_MAX_ATTEMPTS_PER_TRACK = 5
-OCR_COOLDOWN_FRAMES = 10
-
-FRAME_QUEUE_MAXSIZE = 5
+FRAME_QUEUE_MAXSIZE = 10
 
 # Decimate a video file's frame rate down to this before it ever reaches the
 # pipeline — a fixed, uniform stride (unlike the earlier load-adaptive
 # skipping) that cuts CPU workload substantially while keeping consecutive
-# processed frames close enough together for ByteTrack to still follow
-# normal traffic motion. None/0 disables decimation (process every frame).
+# processed frames close enough together for PlateTracker's nearest-center
+# matcher to still follow normal traffic motion. None/0 disables decimation
+# (process every frame).
 PROCESSING_FPS = 5
 
 RTSP_RECONNECT_INITIAL_DELAY = 1.0

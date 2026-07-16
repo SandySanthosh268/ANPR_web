@@ -25,7 +25,7 @@ _MATCH_RADIUS_PX = 150
 # then covers far fewer seconds — which paradoxically made *less* decimation
 # fragment the same physical plate into more track_ids, not fewer. A
 # real-seconds threshold stays consistent regardless of decimation rate.
-_MAX_MISSED_SECONDS = 1.0
+_MAX_MISSED_SECONDS = 1.5
 
 
 @dataclass
@@ -84,15 +84,20 @@ class PlateTracker:
     detected vehicle box contains it (for `vehicle_type`/`vehicle_bbox`).
 
     Deliberately NOT built on Ultralytics' ByteTrack integration: measured on
-    a real video, ByteTrack's IoU-based matching confirmed a track for only
-    ~7% of processed frames at this pipeline's frame decimation rate (vs.
-    ~73% with no decimation) — plate boxes are small enough that ordinary
-    frame-to-frame motion tanks their IoU, so ByteTrack silently dropped the
-    detection entirely rather than just losing its identity. A confident
-    detection should always produce a box and go to OCR; this simple
-    nearest-center matcher provides continuity where it can (for OCR
+    a real video, ByteTrack's IoU-based matching (whether tracking plate
+    boxes or vehicle boxes) confirmed a track for only a small fraction of
+    processed frames at this pipeline's frame decimation rate — see
+    TRACKING_APPROACH_COMPARISON_REPORT.md for the full comparison. A
+    confident detection should always produce a box and go to OCR; this
+    simple nearest-center matcher provides continuity where it can (for OCR
     throttling / Detection Table grouping) without ever discarding a
     detection just because it couldn't be linked to a previous frame.
+
+    This still occasionally fragments one physical plate into more than one
+    track_id (if it goes undetected for longer than _MAX_MISSED_SECONDS) —
+    that's reconciled downstream by app.services.plate_identity.PlateIdentity
+    once OCR resolves a repeated plate text, not by this class (it has no
+    OCR text to go on at tracking time).
     """
 
     def __init__(self, detector: PlateDetector):
@@ -145,20 +150,20 @@ class PlateTracker:
             return []
 
         self._candidates = [
-            c for c in self._candidates if self._frame_counter - c.seen_at <= _MAX_MISSED_FRAMES
+            c for c in self._candidates if timestamp - c.seen_at <= _MAX_MISSED_SECONDS
         ]
 
         tracked: list[TrackedPlate] = []
         for (x1, y1, x2, y2), plate_conf in plate_boxes:
             center = ((x1 + x2) / 2, (y1 + y2) / 2)
-            candidate = self._match(center)
+            candidate = self._match(center, timestamp)
             if candidate is None:
-                candidate = _Candidate(self._next_id, center, self._frame_counter)
+                candidate = _Candidate(self._next_id, center, timestamp)
                 self._next_id += 1
                 self.total_vehicle_count += 1
                 self._candidates.append(candidate)
             else:
-                elapsed = self._frame_counter - candidate.seen_at
+                elapsed = timestamp - candidate.seen_at
                 if elapsed > 0:
                     observed_velocity = (
                         (center[0] - candidate.center[0]) / elapsed,
@@ -173,7 +178,7 @@ class PlateTracker:
                         (candidate.velocity[1] + observed_velocity[1]) / 2,
                     )
                 candidate.center = center
-                candidate.seen_at = self._frame_counter
+                candidate.seen_at = timestamp
 
             vehicle_type, vehicle_bbox = _find_containing_vehicle(center, vehicle_boxes)
             tracked.append(
@@ -187,16 +192,16 @@ class PlateTracker:
             )
         return tracked
 
-    def _match(self, center: tuple[float, float]) -> _Candidate | None:
+    def _match(self, center: tuple[float, float], timestamp: float) -> _Candidate | None:
         # Match against where the candidate is *predicted* to be now (last
-        # known position + velocity * elapsed frames), not where it was last
+        # known position + velocity * elapsed seconds), not where it was last
         # seen — a plate moving at a steady speed across a multi-frame gap
         # (decimation + CPU load) can easily end up outside a fixed radius
         # of its old position while still landing right at the prediction.
         best: _Candidate | None = None
         best_dist = _MATCH_RADIUS_PX
         for candidate in self._candidates:
-            predicted = candidate.predicted_center(self._frame_counter)
+            predicted = candidate.predicted_center(timestamp)
             dist = math.dist(predicted, center)
             if dist < best_dist:
                 best_dist = dist

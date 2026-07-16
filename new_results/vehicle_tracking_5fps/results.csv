@@ -1,0 +1,6 @@
+track_id,vehicle_type,first_frame,last_frame,ocr_attempts,best_plate,best_confidence,all_readings
+1,motorcycle,5,5,1,,0.000,
+2,car,5,5,0,,0.000,
+5,auto,15,1325,242,TN03D9766,0.992,TN039766;TN03D9766;TN03O9766
+19,auto,35,35,1,TN03D9766,0.982,TN03D9766
+189,car,880,880,0,,0.000,

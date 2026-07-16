@@ -62,8 +62,13 @@ def main() -> None:
             break
         frame_id += 1
 
+        # Matches VideoReader's video_time computation (app/camera/video_reader.py)
+        # so the tracker's missed-time tolerance means the same thing here as
+        # it does in production, regardless of how fast this script decodes.
+        video_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+
         t0 = time.perf_counter()
-        tracked = tracker.track(frame)
+        tracked = tracker.track(frame, video_time)
         detect_ms = (time.perf_counter() - t0) * 1000
 
         for plate in tracked:

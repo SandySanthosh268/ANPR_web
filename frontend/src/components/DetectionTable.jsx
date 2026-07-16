@@ -19,7 +19,8 @@ export default function DetectionTable({ results }) {
       <thead>
         <tr className="border-b border-gray-700 text-left text-gray-400">
           <th className="py-1.5 pr-4">Track</th>
-          <th className="py-1.5 pr-4">Image</th>
+          <th className="py-1.5 pr-4">Vehicle Image</th>
+          <th className="py-1.5 pr-4">Plate Image</th>
           <th className="py-1.5 pr-4">Vehicle</th>
           <th className="py-1.5 pr-4">Plate</th>
           <th className="py-1.5 pr-4">Confidence</th>
@@ -32,6 +33,17 @@ export default function DetectionTable({ results }) {
           return (
             <tr key={r.id} className="border-b border-gray-800">
               <td className="py-1.5 pr-4 text-gray-300">#{r.track_id}</td>
+              <td className="py-1.5 pr-4">
+                {r.vehicle_image ? (
+                  <img
+                    src={r.vehicle_image}
+                    alt={`Vehicle crop for track ${r.track_id}`}
+                    className="h-12 rounded"
+                  />
+                ) : (
+                  <span className="text-gray-600">—</span>
+                )}
+              </td>
               <td className="py-1.5 pr-4">
                 {r.image ? (
                   <img src={r.image} alt={`Plate crop for track ${r.track_id}`} className="h-8 rounded" />

@@ -34,7 +34,21 @@ _COMMON_CONFUSIONS = {
     frozenset({"N", "H"}), frozenset({"O", "Q"}), frozenset({"I", "L"}),
     frozenset({"B", "R"}), frozenset({"D", "O"}), frozenset({"E", "F"}),
     frozenset({"G", "C"}), frozenset({"M", "N"}), frozenset({"V", "Y"}),
+    # 'I' misread for 'T' (e.g. 'IN' -> 'TN') -- a bold vertical stroke with
+    # a top serif reads as either letter at low plate-crop resolution.
+    frozenset({"I", "T"}),
+    frozenset({"U", "V"}), frozenset({"P", "R"}), frozenset({"W", "V"}),
 }
+
+
+# Digit <-> letter look-alikes PaddleOCR commonly swaps in the *series*
+# segment (the 0-3 letters between the RTO digits and the final number,
+# e.g. the "B" in TN09B1234) — this segment is letters, but a digit shape
+# that looks like one often gets read instead (e.g. '8' for 'B').
+# Inverted, the same map corrects the opposite mistake (a look-alike letter
+# read where a digit segment was expected).
+_DIGIT_TO_LETTER = {"0": "O", "1": "I", "5": "S", "8": "B", "2": "Z", "6": "G"}
+_LETTER_TO_DIGIT = {letter: digit for digit, letter in _DIGIT_TO_LETTER.items()}
 
 
 def is_valid_plate(text: str) -> bool:
@@ -60,6 +74,14 @@ def _correct_state_code(text: str) -> str:
     prefix, rest = text[:2], text[2:]
     if prefix in _VALID_STATE_CODES:
         return text
+    # A digit in the prefix (e.g. 'N0...') is a digit/letter misread, not a
+    # state-code letter typo -- that's _fix_digit_letter_confusions' job via
+    # its own explicit digit->letter map. Leaving it alone here avoids the
+    # unique-closest-code fallback below "correcting" it against a code that
+    # just happens to be the only one differing by one position, dropping a
+    # real digit in the process (e.g. 'N0981234' -> 'NL981234').
+    if not prefix.isalpha():
+        return text
 
     close_matches = [
         code for code in _VALID_STATE_CODES if _differing_letter_pair(code, prefix) is not None
@@ -72,6 +94,70 @@ def _correct_state_code(text: str) -> str:
     if len(close_matches) == 1:
         return close_matches[0] + rest
     return text
+
+
+def _fix_digit_letter_confusions(text: str) -> str | None:
+    """Indian plates alternate letter/digit segments (2 state letters, 1-2
+    RTO digits, 0-3 series letters, 3-4 number digits) whose exact split
+    varies per plate, so this tries every valid segment-length combination
+    that adds up to len(text); for each, substitutes a digit for its letter
+    look-alike in segments expecting letters (and vice versa for digit
+    segments) via _DIGIT_TO_LETTER/_LETTER_TO_DIGIT, and returns the first
+    combination that produces a fully consistent, valid plate. Returns None
+    if no segmentation works.
+
+    rto_len=2 is tried before rto_len=1: a 2-digit RTO code is the norm on
+    Indian plates, a 1-digit one is comparatively rare. Without this order,
+    a misread like 'TN0SOB4398' (should be RTO '05', 'S' misread for '5')
+    parses just fine taken literally as RTO '0' + series 'SOB' -- a real,
+    syntactically valid plate shape, so nothing downstream would ever
+    suspect it's wrong. Preferring the 2-digit interpretation whenever a
+    look-alike letter (O/I/S/B/Z/G) sits right where a second RTO digit
+    would go catches this without needing anything beyond the format itself.
+    """
+    n = len(text)
+    for rto_len in (2, 1):
+        for series_len in (0, 1, 2, 3):
+            for number_len in (3, 4):
+                if 2 + rto_len + series_len + number_len != n:
+                    continue
+                chars = list(text)
+                ok = True
+
+                def _fix_segment(start: int, length: int, expect_letter: bool) -> None:
+                    nonlocal ok
+                    for i in range(start, start + length):
+                        ch = chars[i]
+                        if expect_letter:
+                            if ch.isdigit():
+                                if ch in _DIGIT_TO_LETTER:
+                                    chars[i] = _DIGIT_TO_LETTER[ch]
+                                else:
+                                    ok = False
+                            elif not ch.isalpha():
+                                ok = False
+                        else:
+                            if ch.isalpha():
+                                if ch in _LETTER_TO_DIGIT:
+                                    chars[i] = _LETTER_TO_DIGIT[ch]
+                                else:
+                                    ok = False
+                            elif not ch.isdigit():
+                                ok = False
+
+                _fix_segment(0, 2, expect_letter=True)
+                _fix_segment(2, rto_len, expect_letter=False)
+                _fix_segment(2 + rto_len, series_len, expect_letter=True)
+                _fix_segment(2 + rto_len + series_len, number_len, expect_letter=False)
+
+                if ok:
+                    candidate = "".join(chars)
+                    corrected = _correct_state_code(candidate)
+                    if is_valid_plate(corrected):
+                        return corrected
+                    if is_valid_plate(candidate):
+                        return candidate
+    return None
 
 
 def normalize_plate(text: str) -> str | None:
@@ -90,10 +176,23 @@ def normalize_plate(text: str) -> str | None:
     Each candidate still has to pass the strict format check, so a
     correction is only applied when it actually produces something
     plate-shaped — this doesn't loosen what counts as a valid plate.
+
+    _fix_digit_letter_confusions is tried first, not as a last resort: it
+    already re-runs the state-code correction internally, and — critically —
+    prefers a standard 2-digit RTO code over accepting a reading literally
+    even when that literal reading already happens to be syntactically
+    valid (e.g. 'TN0SOB4398', a plate-shaped string on its own, but almost
+    certainly RTO '05' with '5' misread as 'S'). Checking plain validity
+    first would accept that literal reading and never reconsider it.
     """
     candidates = [text]
     if len(text) > _MIN_LENGTH:
         candidates.append(text[1:])
+
+    for candidate in candidates:
+        fixed = _fix_digit_letter_confusions(candidate)
+        if fixed is not None:
+            return fixed
 
     for candidate in candidates:
         corrected = _correct_state_code(candidate)

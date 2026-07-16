@@ -2,10 +2,12 @@
 and dump a per-track results CSV — no FastAPI/DB/websocket/RTSP involved.
 
 Uses the exact same classes as the production pipeline (PlateDetector,
-PlateTracker, PlateReader, OcrGate, normalize_plate — see
-app/services/pipeline.py) so this is not a re-implementation that could
-drift from production behavior, just the same logic run synchronously
-against a file instead of a live camera.
+PlateTracker, PlateReader, normalize_plate — see app/services/pipeline.py)
+so this is not a re-implementation that could drift from production
+behavior, just the same logic run synchronously against a file instead of
+a live camera. OCR runs on every tracked plate every frame, unthrottled,
+matching production (see app/services/pipeline.py / ocr_worker.py — the
+OcrGate throttle was removed).
 
 Purpose: produce a baseline CSV on this (CPU) machine, then run the paired
 Colab notebook (colab_full_pipeline_test.ipynb) on the same video with the
@@ -18,6 +20,21 @@ Writes two CSVs:
                 detection confidence/inference time, and (on frames where
                 OCR ran) the raw OCR text/confidence/inference time and
                 whether it passed validation.
+
+By default decimates the source to --target-fps (5, matching production's
+PROCESSING_FPS in app/config.py) using the exact same fixed-stride formula as
+VideoReader (app/camera/video_reader.py): stride = round(native_fps /
+target_fps). Pass --target-fps 0 to process every frame instead (no
+decimation) — useful for stress-testing tracking independent of what
+production's frame rate happens to skip.
+
+Known, intentional difference from production: this script reports
+PlateTracker's raw track_ids as-is, so a plate PlateTracker fragmented into
+2-3 track_ids (see TRACKING_APPROACH_COMPARISON_REPORT.md) still shows up as
+that many rows here. Production additionally runs each *accepted* reading
+through app.services.plate_identity.PlateIdentity to fold such fragments
+back into a single reported vehicle — left out here on purpose, since this
+script's value is showing the tracker's actual raw behavior for diagnosis.
 
 Run from the backend/ directory:
     python run_pipeline_offline.py --source /path/to/vid1.mp4 --out local_results.csv --frames-out local_frames.csv
@@ -32,7 +49,6 @@ import cv2
 from app.detection.plate_detector import PlateDetector
 from app.ocr.plate_reader import PlateReader
 from app.ocr.plate_validator import normalize_plate
-from app.services.ocr_gate import OcrGate
 from app.tracking.plate_tracker import PlateTracker
 
 
@@ -63,20 +79,29 @@ def main() -> None:
         "--frames-out", default=None,
         help="Per-frame detection CSV path (default: derived from --out, e.g. pipeline_results_frames.csv)",
     )
+    parser.add_argument(
+        "--target-fps", type=float, default=10.0,
+        help="Decimate to this fps, matching production's PROCESSING_FPS (default 5). 0 = every frame.",
+    )
     args = parser.parse_args()
     frames_out = args.frames_out or args.out.rsplit(".", 1)[0] + "_frames.csv"
 
     detector = PlateDetector()
     tracker = PlateTracker(detector)
     ocr_reader = PlateReader()
-    ocr_gate = OcrGate()
 
     cap = cv2.VideoCapture(args.source)
     if not cap.isOpened():
         raise SystemExit(f"Could not open source: {args.source}")
 
+    # Same fixed-stride formula as VideoReader.__init__ (app/camera/video_reader.py).
+    native_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    frame_stride = max(1, round(native_fps / args.target_fps)) if args.target_fps and native_fps else 1
+    print(f"Native fps={native_fps:.2f}, target_fps={args.target_fps}, stride={frame_stride}")
+
     records: dict[int, TrackRecord] = {}
     frame_id = 0
+    processed_count = 0
     t_start = time.perf_counter()
 
     frames_file = open(frames_out, "w", newline="")
@@ -96,8 +121,17 @@ def main() -> None:
             break
         frame_id += 1
 
+        if frame_id % frame_stride != 0:
+            continue  # decimated frame, matching VideoReader's stride exactly
+        processed_count += 1
+
+        # Matches VideoReader's video_time computation so the tracker's
+        # missed-time tolerance means the same thing here as in production,
+        # regardless of how fast this offline script processes frames.
+        video_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+
         t_detect = time.perf_counter()
-        tracked = tracker.track(frame)
+        tracked = tracker.track(frame, video_time)
         detect_ms = (time.perf_counter() - t_detect) * 1000
 
         for plate in tracked:
@@ -111,7 +145,9 @@ def main() -> None:
             px1, py1, px2, py2 = plate.bbox
 
             crop = _crop(frame, plate.bbox)
-            ocr_ran = crop.size > 0 and ocr_gate.should_run(plate.track_id, frame_id, crop)
+            # No throttling gate — OCR runs on every tracked plate every
+            # frame, matching production (see app/services/pipeline.py).
+            ocr_ran = crop.size > 0
             ocr_raw_text = ocr_confidence = ocr_validated = ocr_status = ""
             ocr_ms = ""
 
@@ -123,7 +159,6 @@ def main() -> None:
                 if result is None:
                     ocr_status = "no_text"
                 else:
-                    ocr_gate.record_attempt(plate.track_id, frame_id, result.confidence, crop)
                     record.ocr_attempts += 1
                     ocr_raw_text = result.text
                     ocr_confidence = f"{result.confidence:.3f}"
@@ -151,7 +186,8 @@ def main() -> None:
     frames_file.close()
     cap.release()
     elapsed = time.perf_counter() - t_start
-    print(f"Processed {frame_id} frames in {elapsed:.1f}s ({frame_id/elapsed:.1f} fps)")
+    print(f"Source frames: {frame_id}, processed (after decimation): {processed_count} "
+          f"in {elapsed:.1f}s ({processed_count/elapsed:.1f} processed-fps)")
     print(f"Tracks seen: {len(records)}")
     print(f"Wrote {frames_out}")
 

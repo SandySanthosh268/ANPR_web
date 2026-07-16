@@ -130,9 +130,9 @@ def run(source: str, camera_id: str, api_host: str, api_port: int) -> None:
     config.PUBLIC_PORT = api_port
 
     # Loaded once and reused across cycles — reloading models on every replay
-    # of a video file would be wasteful, and ByteTrack/the OCR gate degrade
-    # gracefully across a source restart (new track_ids get assigned once
-    # motion prediction can no longer match, same as a real camera scene cut).
+    # of a video file would be wasteful, and PlateTracker degrades gracefully
+    # across a source restart (new track_ids get assigned once motion
+    # prediction can no longer match, same as a real camera scene cut).
     pipeline = Pipeline(camera_id=camera_id, sink=_build_sink())
 
     api_server = ApiServer(host=api_host, port=api_port)

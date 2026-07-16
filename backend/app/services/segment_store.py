@@ -105,6 +105,7 @@ class SegmentStore:
         plate: str | None,
         ocr_confidence: float | None,
         image: str,
+        vehicle_image: str,
         status: str,
     ) -> None:
         with self._lock:
@@ -116,6 +117,7 @@ class SegmentStore:
                     "plate": plate,
                     "ocr_confidence": ocr_confidence,
                     "image": image,
+                    "vehicle_image": vehicle_image,
                     "status": status,
                 }
             )
